@@ -47,46 +47,10 @@ def execute_command(command):
     return return_code
 
 
-def get_email_messages(gmail_client, query):
-    print('Gmail query: {}'.format(query))
-    message_ids = gmail_client.list_messages_matching_query(query=query)
-
-    all_messages = []
-    for message in message_ids:
-        complete_message = gmail_client.get_message(message['id'])
-        all_messages.append(complete_message)
-
-    return all_messages
 
 
-def get_credit_card_email(gmail_client, config):
-    checkpoint_file = config['cc_email_checkpoint']
-
-    if not isfile(checkpoint_file):
-        query = 'from:{} subject:{} in:{}'.format(config['from_citi_email'], config['email_subject'], config['email_folder'])
-        complete_message = get_email_messages(gmail_client, query)[0]
-
-        pk.dump(complete_message, open(checkpoint_file, 'wb'))
-    else:
-        complete_message = pk.load(open(checkpoint_file, 'rb'))
-
-    return complete_message
 
 
-def get_credit_card_attachment(gmail_client, config):
-
-    if not isfile(config['pdf_filename']):
-        email = get_credit_card_email(gmail_client, config)
-
-        for part in email['payload']['parts']:
-            if part['mimeType'] == 'application/pdf':
-                attachment_id = part['body']['attachmentId']
-                attachment = gmail_client.get_attachment(email['id'], attachment_id)
-
-                file_data = base64.urlsafe_b64decode(attachment['data'].encode('UTF-8'))
-                f = open(config['pdf_filename'], 'wb')
-                f.write(file_data)
-                f.close()
 
 
 def open_tabula_app(tabula_path, open_app):
@@ -186,10 +150,10 @@ def get_uber_mail_data(gmail_client, config, min_date, max_date):
         value = float(value_str[1:])
         part = m['snippet'].split(' | ')[0].replace(value_str, '').replace(' Thanks for choosing Uber, Camilo ', '')
         try:
-            date = datetime.strptime(part.strip(), '%B %d, %Y')
+            date = datetime.strptime(part.strip(), '%b %d, %Y')
         except:
             date_str = input("Error. Enter date manually: ")
-            date = datetime.strptime(date_str, '%B %d, %Y')
+            date = datetime.strptime(date_str, '%b %d, %Y')
         data.append({
             'date': date,
             'value': value
