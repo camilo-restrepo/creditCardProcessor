@@ -1,4 +1,4 @@
-from external.gmail import Gmail
+from gmail import Gmail
 import json
 import sys
 from datetime import datetime, timedelta
