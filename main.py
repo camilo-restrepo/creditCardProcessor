@@ -353,9 +353,6 @@ def save_result_files(**kwargs):
     results.to_excel(writer, 'Sheet1')
     writer.save()
 
-    csv_file = os.path.join(data_dir, config['result_config']['csv_file'])
-    results.to_csv(csv_file, index=False)
-
 
 def clean():
     if os.path.exists(tmp_dir):
