@@ -215,8 +215,11 @@ def get_bank_email_body(email):
     return mssg_body
 
 
-def find_in_text(regex, text):
-    m = re.search(regex, text)
+def find_in_text(regex, text, ignore_case=False):
+    flags = 0
+    if ignore_case:
+        flags = re.IGNORECASE
+    m = re.search(regex, text, flags=flags)
     if m:
         found = m.group(0)
         return found
@@ -256,7 +259,7 @@ def get_uber_messages(min_date, max_date):
 
     return all_messages
 
-#TODO: FIX UBER EMAIL
+
 def get_uber_data(**kwargs):
     min_date = kwargs['task_instance'].xcom_pull(key='min_date', task_ids='get_transactions')
     max_date = kwargs['task_instance'].xcom_pull(key='max_date', task_ids='get_transactions')
@@ -266,16 +269,13 @@ def get_uber_data(**kwargs):
     for email in emails:
         value_str = find_in_text(r'\$\d+', email['snippet'])
         value = float(value_str[1:])
-        part = email['snippet'].split(' | ')[0].replace(value_str, '').replace(' Thanks for choosing Uber, Camilo ', '')
-
-        date_patterns = config['uber_email_config']['patterns']
-
-        date = None
-        for pattern in date_patterns:
-            try:
-                date = datetime.strptime(part.strip(), pattern)
-            except:
-                continue
+        regex = r'\b(mon|tues|wed|thur|fri|sat|sun)\b,? (jan|feb|mar|apr|may|jun|jul|sept|oct|nov|dec) \d{2}, \d{4}'
+        date = find_in_text(regex, email['snippet'], ignore_case=True)
+        print('----------------------------- UBER SNIPPET -----------------------------')
+        print(email['snippet'])
+        print('Value: {}'.format(value))
+        print('Date: {}'.format(date))
+        print('---------------------------------------------------------------------------')
 
         if date:
             data.append({
@@ -283,9 +283,7 @@ def get_uber_data(**kwargs):
                 'value': value
             })
         else:
-            print('----------------------------- UBER DATE ERROR -----------------------------')
-            print(part.strip())
-            print('---------------------------------------------------------------------------')
+            raise ValueError('Date not parsed correctly.')
 
     kwargs['task_instance'].xcom_push(key='uber_data', value=data)
 
@@ -396,18 +394,17 @@ get_uber_data_task = PythonOperator(task_id='get_uber_data', python_callable=get
 get_uber_data_task.set_upstream(get_bank_data_task)
 
 consolidate_data_task = PythonOperator(task_id='consolidate_data', python_callable=consolidate_data, dag=dag,
-                                    provide_context=True)
+                                       provide_context=True)
 consolidate_data_task.set_upstream(get_uber_data_task)
 
 save_transactions_task = PythonOperator(task_id='save_transactions', python_callable=save_transactions, dag=dag,
-                                    provide_context=True)
+                                        provide_context=True)
 save_transactions_task.set_upstream(consolidate_data_task)
 
 save_result_files_task = PythonOperator(task_id='save_result_files', python_callable=save_result_files, dag=dag,
-                                    provide_context=True)
+                                        provide_context=True)
 save_result_files_task.set_upstream(consolidate_data_task)
 
 clean_task = PythonOperator(task_id='clean', python_callable=clean, dag=dag)
 clean_task.set_upstream(save_transactions_task)
 clean_task.set_upstream(save_result_files_task)
-
