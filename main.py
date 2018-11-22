@@ -192,10 +192,21 @@ def get_transactions(**kwargs):
     kwargs['task_instance'].xcom_push(key='transactions', value=bank_transactions)
 
 
-def get_bank_messages(ini_date, end_date):
-    bank_config = config['bank_email_config']
-    query = 'from:{} subject:{} in:{} after:{} before:{}'
-    query = query.format(bank_config['from'], bank_config['subject'], bank_config['folder'], ini_date, end_date)
+def get_bank_messages(bank_config, ini_date, end_date):
+    query_params = []
+    if 'from' in bank_config:
+        query_params.append('from:{}'.format(bank_config['from']))
+
+    if 'subject' in bank_config:
+        query_params.append('subject:{}'.format(bank_config['subject']))
+
+    if 'folder' in bank_config:
+        query_params.append('in:{}'.format(bank_config['folder']))
+
+    query_params.append('after:{} before:{}'.format(ini_date, end_date))
+    # query = 'from:{} subject:{} in:{} after:{} before:{}'
+    # query = query.format(bank_config['from'], bank_config['subject'], bank_config['folder'], ini_date, end_date)
+    query = ' '.join(query_params)
     all_messages = gmail_client.get_email_messages(query)
 
     return all_messages
@@ -229,7 +240,7 @@ def find_in_text(regex, text, ignore_case=False):
 def get_bank_data(**kwargs):
     ini_date = kwargs['task_instance'].xcom_pull(key='min_date', task_ids='get_transactions')
     end_date = kwargs['task_instance'].xcom_pull(key='max_date', task_ids='get_transactions')
-    emails = get_bank_messages(ini_date, end_date)
+    emails = get_bank_messages(config['bank_email_config'], ini_date, end_date)
 
     data = []
     for email in emails:
@@ -352,6 +363,69 @@ def save_result_files(**kwargs):
     writer.save()
 
 
+def last_day_of_month(any_day):
+    next_month = any_day.replace(day=28) + timedelta(days=4)
+    return next_month - timedelta(days=next_month.day)
+
+
+def get_debit_card_data(**kwargs):
+    ini_date = datetime.today().replace(day=1).date()
+    end_date = last_day_of_month(ini_date)
+    emails = get_bank_messages(config['debit_card_email_config'], ini_date, end_date)
+
+    data = []
+    for email in emails:
+        body = get_bank_email_body(email)
+        body = body.replace('\r', '')
+        sentences = body.split('\n')
+
+        date = None
+        value = None
+        for sentence in sentences:
+            s = sentence.strip()
+            if s.startswith('Fecha'):
+                date = datetime.strptime(find_in_text(r'\d\d/\d\d/\d\d\d\d', s), '%d/%m/%Y')
+            elif s.startswith('Valor'):
+                value = float(find_in_text(r'\d+\,\d+.\d+', s).replace(',', ''))
+
+        if date and value:
+            data.append({
+                'date': date,
+                'name': '',
+                'value': value,
+                'dt': month
+            })
+
+    df = pd.DataFrame(data)
+    kwargs['task_instance'].xcom_push(key='debit_card_data', value=df)
+
+
+def save_debit_card_data(**kwargs):
+    transactions = kwargs['task_instance'].xcom_pull(key='debit_card_data', task_ids='get_debit_card_data')
+    transactions['value'] = transactions['value'].astype(float)
+    transactions['date'] = transactions['date'].dt.strftime('%Y-%m-%d')
+
+    mysql = MySqlHook(mysql_conn_id='credit_card_processor')
+    mysql_conn = mysql.get_conn()
+
+    cursor = mysql_conn.cursor()
+    cursor.execute(config['mysql']['create_transaction_table'])
+
+    wildcards = ','.join(['%s'] * len(transactions.columns))
+    colnames = ','.join(transactions.columns)
+
+    insert_sql = config['mysql']['create_transaction'] % (config['mysql']['transaction_table'], colnames, wildcards)
+    data = [tuple([v for v in rw]) for rw in transactions.values]
+    cursor.executemany(insert_sql, data)
+
+    mysql_conn.commit()
+    cursor.close()
+
+
+def get_vouchers_data(**kwargs):
+    pass
+
+
 def clean():
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
@@ -408,3 +482,23 @@ save_result_files_task.set_upstream(consolidate_data_task)
 clean_task = PythonOperator(task_id='clean', python_callable=clean, dag=dag)
 clean_task.set_upstream(save_transactions_task)
 clean_task.set_upstream(save_result_files_task)
+
+get_debit_card_data_task = PythonOperator(task_id='get_debit_card_data', python_callable=get_debit_card_data, dag=dag,
+                                          provide_context=True)
+get_debit_card_data_task.set_upstream(create_dirs_task)
+
+save_debit_card_data_task = PythonOperator(task_id='save_debit_card_data', python_callable=save_debit_card_data,
+                                           dag=dag, provide_context=True)
+save_debit_card_data_task.set_upstream(get_debit_card_data_task)
+
+
+get_vouchers_data_task = PythonOperator(task_id='get_vouchers_data', python_callable=get_vouchers_data, dag=dag,
+                                        provide_context=True)
+get_vouchers_data_task.set_upstream(get_transactions_task)
+
+consolidate_data_task.set_upstream(get_vouchers_data_task)
+
+
+# TODO: Add document scanner.
+
+
