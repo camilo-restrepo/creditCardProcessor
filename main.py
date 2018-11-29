@@ -102,6 +102,7 @@ class Gmail(object):
             complete_message = self.__get_message__(message['id'])
             all_messages.append(complete_message)
 
+        print(len(all_messages))
         return all_messages
 
 
@@ -109,6 +110,7 @@ config = Variable.get('credit_card_processor_config', deserialize_json=True)
 month = datetime.today().strftime('%Y-%m')
 gmail_client = Gmail(config['gmail_config'])
 data_dir = os.path.join(config['root_dir'], month)
+images_dir = os.path.join(data_dir, 'vouchers')
 tmp_dir = os.path.join(data_dir, 'tmp')
 
 
@@ -117,6 +119,7 @@ def create_dirs():
         shutil.rmtree(data_dir)
 
     os.makedirs(data_dir)
+    os.makedirs(images_dir)
     os.makedirs(tmp_dir)
 
 
@@ -192,20 +195,18 @@ def get_transactions(**kwargs):
     kwargs['task_instance'].xcom_push(key='transactions', value=bank_transactions)
 
 
-def get_bank_messages(bank_config, ini_date, end_date):
+def get_email_messages(email_config, ini_date, end_date):
     query_params = []
-    if 'from' in bank_config:
-        query_params.append('from:{}'.format(bank_config['from']))
+    if 'from' in email_config:
+        query_params.append('from:{}'.format(email_config['from']))
 
-    if 'subject' in bank_config:
-        query_params.append('subject:{}'.format(bank_config['subject']))
+    if 'subject' in email_config:
+        query_params.append('subject:{}'.format(email_config['subject']))
 
-    if 'folder' in bank_config:
-        query_params.append('in:{}'.format(bank_config['folder']))
+    if 'folder' in email_config:
+        query_params.append('in:{}'.format(email_config['folder']))
 
     query_params.append('after:{} before:{}'.format(ini_date, end_date))
-    # query = 'from:{} subject:{} in:{} after:{} before:{}'
-    # query = query.format(bank_config['from'], bank_config['subject'], bank_config['folder'], ini_date, end_date)
     query = ' '.join(query_params)
     all_messages = gmail_client.get_email_messages(query)
 
@@ -240,7 +241,7 @@ def find_in_text(regex, text, ignore_case=False):
 def get_bank_data(**kwargs):
     ini_date = kwargs['task_instance'].xcom_pull(key='min_date', task_ids='get_transactions')
     end_date = kwargs['task_instance'].xcom_pull(key='max_date', task_ids='get_transactions')
-    emails = get_bank_messages(config['bank_email_config'], ini_date, end_date)
+    emails = get_email_messages(config['bank_email_config'], ini_date, end_date)
 
     data = []
     for email in emails:
@@ -263,10 +264,11 @@ def get_bank_data(**kwargs):
 
 
 def get_uber_messages(min_date, max_date):
-    uber_config = config['uber_email_config']
-    query = 'from:{} in:{} after:{} before:{}'
-    query = query.format(uber_config['from'], uber_config['folder'], min_date, max_date)
-    all_messages = gmail_client.get_email_messages(query)
+    # uber_config = config['uber_email_config']
+    # query = 'from:{} in:{} after:{} before:{}'
+    # query = query.format(uber_config['from'], uber_config['folder'], min_date, max_date)
+    # all_messages = gmail_client.get_email_messages(query)
+    all_messages = get_email_messages(config['uber_email_config'], min_date, max_date)
 
     return all_messages
 
@@ -275,13 +277,21 @@ def get_uber_data(**kwargs):
     min_date = kwargs['task_instance'].xcom_pull(key='min_date', task_ids='get_transactions')
     max_date = kwargs['task_instance'].xcom_pull(key='max_date', task_ids='get_transactions')
     emails = get_uber_messages(min_date, max_date)
-
+    patterns = config['uber_email_config']['patterns']
     data = []
     for email in emails:
         value_str = find_in_text(r'\$\d+', email['snippet'])
         value = float(value_str[1:])
         regex = r'\b(mon|tues|wed|thur|fri|sat|sun)\b,? (jan|feb|mar|apr|may|jun|jul|sept|oct|nov|dec) \d{2}, \d{4}'
-        date = find_in_text(regex, email['snippet'], ignore_case=True)
+        date_str = find_in_text(regex, email['snippet'], ignore_case=True)
+
+        date = None
+        for p in patterns:
+            try:
+                date = datetime.strptime(date_str, p)
+            except:
+                continue
+
         print('----------------------------- UBER SNIPPET -----------------------------')
         print(email['snippet'])
         print('Value: {}'.format(value))
@@ -371,7 +381,7 @@ def last_day_of_month(any_day):
 def get_debit_card_data(**kwargs):
     ini_date = datetime.today().replace(day=1).date()
     end_date = last_day_of_month(ini_date)
-    emails = get_bank_messages(config['debit_card_email_config'], ini_date, end_date)
+    emails = get_email_messages(config['debit_card_email_config'], ini_date, end_date)
 
     data = []
     for email in emails:
@@ -384,7 +394,7 @@ def get_debit_card_data(**kwargs):
         for sentence in sentences:
             s = sentence.strip()
             if s.startswith('Fecha'):
-                date = datetime.strptime(find_in_text(r'\d\d/\d\d/\d\d\d\d', s), '%d/%m/%Y')
+                date = datetime.strptime(find_in_text(r'\d\d/\d\d/\d\d\d\d', s), '%m/%d/%Y')
             elif s.startswith('Valor'):
                 value = float(find_in_text(r'\d+\,\d+.\d+', s).replace(',', ''))
 
@@ -500,5 +510,6 @@ consolidate_data_task.set_upstream(get_vouchers_data_task)
 
 
 # TODO: Add document scanner.
+# TODO: Refactor para usar get_email_messages en vez de llamar siempre el cliente
 
 
