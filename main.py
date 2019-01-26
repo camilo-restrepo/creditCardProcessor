@@ -394,7 +394,7 @@ def get_debit_card_data(**kwargs):
         for sentence in sentences:
             s = sentence.strip()
             if s.startswith('Fecha'):
-                date = datetime.strptime(find_in_text(r'\d\d/\d\d/\d\d\d\d', s), '%m/%d/%Y')
+                date = datetime.strptime(find_in_text(r'\d+/\d\d/\d\d\d\d', s), '%m/%d/%Y')
             elif s.startswith('Valor'):
                 value = float(find_in_text(r'\d+\,\d+.\d+', s).replace(',', ''))
 
